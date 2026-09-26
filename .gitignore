@@ -1,0 +1,49 @@
+# Datasets and outputs
+dataset/
+dataset.zip
+output/
+checkpoints/
+experiments/
+scratch/
+
+# Data files
+*.csv
+*.tsv
+*.parquet
+*.json
+*.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv/
+env.bak/
+venv.bak/
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+__MACOSX/
+
+# Credentials
+*.pem
+*.key
+
+# Browser saves
+*Unstop*
