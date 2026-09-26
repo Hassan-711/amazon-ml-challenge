@@ -301,6 +301,13 @@ if __name__ == "__main__":
     imp = imp.sort_values('importance', ascending=False)
     imp.to_csv(f"{out_dir}/exp4_feature_importance.csv", index=False)
     
+    model_path = f"{out_dir}/lightgbm_model.txt"
+    gbm.save_model(model_path)
+    
+    thresh_path = f"{out_dir}/best_threshold.txt"
+    with open(thresh_path, "w") as f:
+        f.write(str(best_thresh))
+    
     res = {
         "n_s1_entities": len(unique_s1),
         "n_candidate_pairs": len(df_pairs),
@@ -323,4 +330,6 @@ if __name__ == "__main__":
     with open(f"{out_dir}/exp4_lightgbm_results.json", "w") as f:
         json.dump(res, f, indent=2)
         
+    flush_print(f"\nModel saved to {model_path}")
+    flush_print(f"Threshold saved to {thresh_path}")
     flush_print("\nDONE.")

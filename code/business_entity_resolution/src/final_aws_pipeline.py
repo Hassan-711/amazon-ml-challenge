@@ -137,65 +137,23 @@ def compute_features(df):
     ]
     return df, feature_cols
 
-def get_or_train_model():
-    model_path = "output/lightgbm_model.txt"
-    os.makedirs("output", exist_ok=True)
-    if os.path.exists(model_path):
-        flush_print(f"Loading existing model from {model_path}")
-        return lgb.Booster(model_file=model_path)
+def get_model_and_threshold():
+    model_path = "code/business_entity_resolution/experiments/lightgbm_model.txt"
+    thresh_path = "code/business_entity_resolution/experiments/best_threshold.txt"
     
-    # Needs training! 
-    flush_print("Model not found. You must run Exp4 locally or supply model.txt.")
-    flush_print("Assuming local candidates_10000.parquet exists. Training quick model...")
-    cand_file = "code/business_entity_resolution/experiments/candidates_10000.parquet"
-    if not os.path.exists(cand_file):
-        raise FileNotFoundError("Missing candidates_10000.parquet to train the model!")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model not found at {model_path}. Run Exp4 first.")
+    if not os.path.exists(thresh_path):
+        raise FileNotFoundError(f"Threshold not found at {thresh_path}. Run Exp4 first.")
         
-    df_pairs = pd.read_parquet(cand_file)
-    unique_s1 = set(df_pairs['source1_entity_id'])
-    unique_s23 = set(df_pairs['matched_entity_id'])
+    flush_print(f"Loading model from {model_path}")
+    gbm = lgb.Booster(model_file=model_path)
     
-    base_dir = "dataset/student_resource/dataset/train"
-    df_s1 = pd.read_csv(os.path.join(base_dir, "train_source1.tsv"), sep='\t', dtype=str)
-    df_s1 = df_s1[df_s1['entity_id'].isin(unique_s1)]
-    df_s1.rename(columns={'business_name':'name_s1', 'business_address':'address_s1', 'country':'country_s1'}, inplace=True)
+    with open(thresh_path, "r") as f:
+        thresh = float(f.read().strip())
+    flush_print(f"Loaded optimized threshold: {thresh}")
     
-    s23_rows = []
-    for source in ["train_source2.tsv", "train_source3.tsv"]:
-        chunk_iter = pd.read_csv(os.path.join(base_dir, source), sep='\t', dtype=str, chunksize=1000000)
-        for chunk in chunk_iter:
-            c = chunk[chunk['entity_id'].isin(unique_s23)]
-            s23_rows.append(c)
-    df_s23 = pd.concat(s23_rows, ignore_index=True)
-    df_s23.rename(columns={'business_name':'name_s23', 'business_address':'address_s23', 'country':'country_s23'}, inplace=True)
-    
-    df_s1['name_s1'] = df_s1['name_s1'].apply(fast_normalize)
-    df_s1['address_s1'] = df_s1['address_s1'].apply(fast_normalize)
-    df_s23['name_s23'] = df_s23['name_s23'].apply(fast_normalize)
-    df_s23['address_s23'] = df_s23['address_s23'].apply(fast_normalize)
-    
-    df_pairs = df_pairs.merge(df_s1[['entity_id', 'name_s1', 'address_s1', 'country_s1']], left_on='source1_entity_id', right_on='entity_id', how='left')
-    df_pairs = df_pairs.merge(df_s23[['entity_id', 'name_s23', 'address_s23', 'country_s23']], left_on='matched_entity_id', right_on='entity_id', how='left')
-    
-    df_gt = pd.read_csv(os.path.join(base_dir, "train_ground_truth.tsv"), sep='\t', dtype=str)
-    df_gt = df_gt[df_gt['source1_entity_id'].isin(unique_s1)]
-    gt_dict = {}
-    for _, row in df_gt.iterrows():
-        matches = str(row['matched_entity_ids'])
-        gt_dict[row['source1_entity_id']] = set() if (pd.isna(row['matched_entity_ids']) or matches == 'nan' or matches.strip() == '') else set([x.strip() for x in matches.split(',')])
-            
-    df_pairs['label'] = [1 if s2 in gt_dict.get(s1, set()) else 0 for s1, s2 in zip(df_pairs['source1_entity_id'], df_pairs['matched_entity_id'])]
-    df_pairs, feature_cols = compute_features(df_pairs)
-    
-    X_train = df_pairs[feature_cols].astype(np.float32)
-    y_train = df_pairs['label'].astype(np.float32)
-    
-    lgb_train = lgb.Dataset(X_train, y_train)
-    params = {'objective': 'binary', 'metric': 'binary_logloss', 'boosting_type': 'gbdt', 'learning_rate': 0.1, 'num_leaves': 31, 'n_jobs': -1}
-    gbm = lgb.train(params, lgb_train, num_boost_round=223) # From Exp4
-    gbm.save_model(model_path)
-    flush_print(f"Model saved to {model_path}")
-    return gbm
+    return gbm, thresh
 
 def main():
     parser = argparse.ArgumentParser()
@@ -203,7 +161,6 @@ def main():
     parser.add_argument("--out-dir", default="output")
     parser.add_argument("--threads", type=int, default=-1, help="Threads for Cython SparseDotTopN")
     parser.add_argument("--chunk-size", type=int, default=50000, help="S1 chunk size")
-    parser.add_argument("--threshold", type=float, default=0.65, help="Optimal threshold from Exp4")
     args = parser.parse_args()
     
     os.makedirs(args.out_dir, exist_ok=True)
@@ -213,7 +170,7 @@ def main():
     flush_print("AWS FULL COMPETITION PIPELINE")
     flush_print("============================================================")
     
-    gbm = get_or_train_model()
+    gbm, threshold = get_model_and_threshold()
     
     flush_print("\n[1/4] Loading Test S2/S3 globally...")
     s2s3_names_by_country = defaultdict(list)
@@ -362,7 +319,7 @@ def main():
             df_pairs['pred'] = gbm.predict(X, num_iteration=gbm.best_iteration)
             
             # Filter
-            df_matches = df_pairs[df_pairs['pred'] >= args.threshold]
+            df_matches = df_pairs[df_pairs['pred'] >= threshold]
             
             # Format Matches
             match_dict = defaultdict(list)
