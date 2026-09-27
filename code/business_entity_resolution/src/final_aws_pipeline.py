@@ -161,6 +161,9 @@ def main():
     parser.add_argument("--out-dir", default="output")
     parser.add_argument("--threads", type=int, default=-1, help="Threads for Cython SparseDotTopN")
     parser.add_argument("--chunk-size", type=int, default=50000, help="S1 chunk size")
+    parser.add_argument("--start-chunk", type=int, default=0)
+    parser.add_argument("--end-chunk", type=int, default=None)
+    parser.add_argument("--countries", nargs='+', default=None, help="Process only specific countries")
     args = parser.parse_args()
     
     os.makedirs(args.out_dir, exist_ok=True)
@@ -186,6 +189,8 @@ def main():
             chunk['norm_address'] = fast_normalize_series(chunk['business_address'])
             chunk = chunk[(chunk['norm_name'] != "") | (chunk['norm_address'] != "")]
             for country, grp in chunk.groupby('country'):
+                if args.countries is not None and country not in args.countries:
+                    continue
                 s2s3_names_by_country[country].extend(grp['norm_name'].tolist())
                 s2s3_addresses_by_country[country].extend(grp['norm_address'].tolist())
                 s2s3_ids_by_country[country].extend(grp['entity_id'].tolist())
@@ -196,7 +201,10 @@ def main():
     df_s1_full['norm_address'] = fast_normalize_series(df_s1_full['business_address'])
     
     s1_countries = df_s1_full['country'].unique()
-    
+    if args.countries is not None:
+        s1_countries = [c for c in s1_countries if c in args.countries]
+        flush_print(f"\nFiltering pipeline to process ONLY: {s1_countries}")
+        
     for country in s1_countries:
         s2s3_names = s2s3_names_by_country.get(country, [])
         s2s3_addresses = s2s3_addresses_by_country.get(country, [])
@@ -250,7 +258,10 @@ def main():
         # Process S1 in Chunks
         n_chunks = int(np.ceil(len(df_s1) / args.chunk_size))
         
-        for c_idx in range(n_chunks):
+        start_chunk = args.start_chunk
+        end_chunk = args.end_chunk if args.end_chunk is not None else n_chunks
+        
+        for c_idx in range(start_chunk, min(end_chunk, n_chunks)):
             start = c_idx * args.chunk_size
             end = min((c_idx + 1) * args.chunk_size, len(df_s1))
             s1_chunk = df_s1.iloc[start:end].copy()
@@ -353,6 +364,10 @@ def main():
         if has_addrs: del X_s2s3_addr_T, vec_addr
         del s2s3_df_country, s2s3_exact_name_map
         gc.collect()
+        
+    if args.countries is not None or args.start_chunk != 0 or args.end_chunk is not None:
+        flush_print("\n[4/4] Partial run completed. Skipping final submission merge and validation.")
+        return
         
     flush_print("\n[4/4] Combining chunks into Final Submission Package...")
     match_dfs, cand_dfs = [], []
